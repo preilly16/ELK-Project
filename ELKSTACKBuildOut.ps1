@@ -6,7 +6,7 @@ Set-Item Env:\SuppressAzurePowerShellBreakingChangeWarnings "true"
 ############################
 $resourceGroupName = 'ClassResourceGroup'
 $location = 'EastUS'
-$location1 = 'WestUS'
+$location1 = 'WestUS2'
 $vm1 = 'Jump-Box-Provisioner'
 $vm2 = 'DVWA-VM1'
 $vm3 = 'DVWA-VM2'
@@ -48,15 +48,16 @@ Function Create-AzEnvironment($resourceGroupName, $location) {
   $CIDRRange = '10.0.0.0/16'
   $subnetname = 'default'
   $subnet1 = '10.0.0.0/24'
+  
   # Resource Group
   New-AzResourceGroup -Name $resourceGroupName `
     -Location $location
-
+  
   # Subnet
   $Subnet = New-AzVirtualNetworkSubnetConfig `
     -Name $subnetname `
     -AddressPrefix $subnet1
-
+  
   # Virtual Network
   $virtualNetwork = New-AzVirtualNetwork `
     -ResourceGroupName $resourceGroupName `
@@ -66,7 +67,51 @@ Function Create-AzEnvironment($resourceGroupName, $location) {
     -Subnet $subnet
 
   return $virtualNetwork
+  
 }
+
+#Create ELKStack vnet
+
+Function Create-AzEnvironment($resourceGroupName, $location1) {
+  $vnetName1 = 'ELKStackVNet'
+  $CIDRRange1 = '10.1.0.0/16'
+  $subnetname1 = 'default'
+  $subnet4 = '10.1.0.0/24'
+  
+  #Add New Region to existing Resource Group
+  Get-AzResourceGroup -Name $resourceGroupName `
+    -Location $location1
+
+  # Subnet
+  $Subnet5 = New-AzVirtualNetworkSubnetConfig `
+    -Name $subnetname1 `
+    -AddressPrefix $subnet4
+
+  
+  # Virtual Network
+  $virtualNetwork1 = New-AzVirtualNetwork `
+    -ResourceGroupName $resourceGroupName `
+    -Location $location1 `
+    -Name $vnetname1 `
+    -AddressPrefix $CIDRRange1 `
+    -Subnet $subnet5
+
+  return $virtualNetwork1
+}
+
+#Create Peer2Peer Network
+
+#Peer vnetname to vnetname1
+Add-AzVirtualNetworkPeering `
+  -Name 'Red-to-Elk' `
+  -VirtualNetwork $vnetName `
+  -RemoteVirtualNetworkId $vnetName1.id
+
+#Peer vnetname1 to vnetname
+Add-AzVirtualNetworkPeering `
+  -Name 'Elk-to-Red' `
+  -VirtualNetwork $vnetName1 `
+  -RemoteVirtualNetworkId $vnetName.id
 
 Function Create-CustomVM ($VMName, $location, $resourceGroupName, $availabilitySetName, $VirtulNetwork, $adminuser){
 
@@ -184,6 +229,124 @@ Function Create-CustomVM ($VMName, $location, $resourceGroupName, $availabilityS
     return @{username = $AdminUser }
   }
 }
+
+# Custom Build OF the ELKStackServer
+Function Create-CustomVM ($VMName1, $location1, $resourceGroupName, $availabilitySetName, $VirtulNetwork, $adminuser){
+
+  $securityGroupName = "$VMName1-security-group"
+  $NICName = "$VMName1-NIC"
+  $computerName = $VMName1
+  $PublicIPAddressName = "$VMName1-public-ip"
+  $vmsize1 = 'Standard_D2as_v4'
+  $vmpublisher = 'Canonical'
+  $vmoffer = 'UbuntuServer'
+  $vmskus = '18.04-LTS'
+  $AdminPassword = ConvertTo-SecureString "p4ssw0rd*" -AsPlainText -Force
+  $Credential = New-Object System.Management.Automation.PSCredential ($AdminUser, $AdminPassword);
+
+  # Security Group Config
+  $rule1 = New-AzNetworkSecurityRuleConfig -Name "ssh-rule" `
+    -Description "Allow SSH from Home IP" `
+    -Access Allow `
+    -Protocol Tcp `
+    -Direction Inbound `
+    -Priority 100 `
+    -SourceAddressPrefix "$homeip" `
+    -SourcePortRange * `
+    -DestinationAddressPrefix * `
+    -DestinationPortRange 22
+
+  #Security Group
+  $nsg = New-AzNetworkSecurityGroup -ResourceGroupName $resourceGroupName `
+    -Location $location1 `
+    -Name $securityGroupName `
+    -SecurityRules $rule1
+
+  # Network Interface
+  $NIC = New-AzNetworkInterface -Name $NICName `
+    -ResourceGroupName $ResourceGroupName `
+    -Location $Location1 `
+    -SubnetId $virtualNetwork.Subnets[0].Id
+
+  # Public IP Address
+  $PIP = New-AzPublicIpAddress -Name $PublicIPAddressName `
+    -ResourceGroupName $resourceGroupName `
+    -AllocationMethod Dynamic `
+    -Location $location1
+
+  # Attach Public IP to NIC
+  $nic | Set-AzNetworkInterfaceIpConfig -Name $($nic.IpConfigurations.name) `
+    -PublicIPAddress $pip `
+    -Subnet $subnet | Out-Null
+  $nic | Set-AzNetworkInterface | out-null
+
+  if ($availabilitySetName -ne $null){
+    $availabilityset = Get-AzAvailabilitySet -name $availabilitySetName
+    if (!($availabilityset)){
+      $availabilityset = New-AzAvailabilitySet -Name "$availabilitySetName" `
+        -ResourceGroupName $resourceGroupName `
+        -Location $location1 `
+        -PlatformFaultDomainCount 2 `
+        -PlatformUpdateDomainCount 2 `
+        -Sku Aligned
+    }
+
+    # Virtual Machine Config
+    $VirtualMachine = New-AzVMConfig -VMName $VMName `
+      -VMSize $VMSize1 `
+      -AvailabilitySetId $availabilityset.id
+  }
+  else {
+    # Virtual Machine Config
+    $VirtualMachine = New-AzVMConfig -VMName $VMName1 `
+      -VMSize $VMSize1
+  }
+
+
+
+  # Operating System Config
+  $VirtualMachine = Set-AzVMOperatingSystem -VM $VirtualMachine `
+    -Linux -ComputerName $computerName `
+    -Credential $Credential `
+    -DisablePasswordAuthentication
+
+  # Attach Network Interface
+  $VirtualMachine = Add-AzVMNetworkInterface -VM $VirtualMachine `
+    -Id $NIC.Id
+
+  # Set Source Image
+  $VirtualMachine = Set-AzVMSourceImage -VM $VirtualMachine `
+    -PublisherName $vmpublisher `
+    -Offer $vmoffer `
+    -Skus $vmskus `
+    -Version latest
+
+  # Turn off Boot Diagnostics
+  $VirtualMachine = Set-AzVMBootDiagnostic -VM $VirtualMachine `
+    -Disable
+
+  # Retrieve SSH Key data
+  $sshPublicKey = Get-Content "$profile\.ssh\id_rsa.pub"
+
+  # Add it to virtual machine config settings
+  $VirtulMachine = Add-AzVMSshPublicKey -VM $virtualMachine `
+    -KeyData $sshpublickey `
+    -Path "/home/$AdminUser/.ssh/authorized_keys"
+
+  # Create Virtual Machine
+  $vm = New-AzVM -ResourceGroupName $ResourceGroupName `
+    -Location $Location1 `
+    -VM $VirtualMachine `
+    -Verbose `
+    -AsJob
+
+  if ($availabilitySetName -ne $null) {
+    return @{username = $AdminUser ; availabilityset = $availabilityset }
+  }
+  else {
+    return @{username = $AdminUser }
+  }
+}
 # Custom Function to run Remote Bash Commands
 Function Run-AZRemoteBash($Script, $VMName, $ResourceGroupName, [switch]$AsJob){
   $myscript = @"
@@ -246,7 +409,7 @@ Write-Host 'Job 2 Started...' -ForegroundColor Yellow
 $results[$vm3] = Create-CustomVM -VMName $vm3 -location $location -resourceGroupName $resourceGroupName -VirtulNetwork $virtualnetwork -adminuser $adminuser -availabilitySetName 'RedTeamAS'
 Write-Host 'Job 3 Started...' -ForegroundColor Yellow
 $results[$vm4] = Create-CustomVM -VMName $vm4 -location $location1 -resourceGroupName $resourceGroupName -VirtulNetwork $virtualnetwork -adminuser $adminuser -availabilitySetName 'RedTeamAS'
-Write-Host 'Job 3 Started...' -ForegroundColor Yellow
+Write-Host 'Job 4 Started...' -ForegroundColor Yellow
 
 # Wait for completion of vms.
 Write-Host "Waiting for VM Builds to Complete..." -ForegroundColor Yellow
@@ -267,6 +430,7 @@ Write-Host "Finished Building VMs." -ForegroundColor Green
 $vm1ip = Get-AzNetworkInterface -Name "$VM1-NIC" -ResourceGroupName $resourceGroupName | Get-AzNetworkInterfaceIpConfig | select -ExpandProperty PrivateIpAddress
 $vm2ip = Get-AzNetworkInterface -Name "$VM2-NIC" -ResourceGroupName $resourceGroupName | Get-AzNetworkInterfaceIpConfig | select -ExpandProperty PrivateIpAddress
 $vm3ip = Get-AzNetworkInterface -Name "$VM3-NIC" -ResourceGroupName $resourceGroupName | Get-AzNetworkInterfaceIpConfig | select -ExpandProperty PrivateIpAddress
+$vm4ip = Get-AzNetworkInterface -Name "$VM4-NIC" -ResourceGroupName $resourceGroupName | Get-AzNetworkInterfaceIpConfig | select -ExpandProperty PrivateIpAddress
 
 ######################
 ## Configure VM1
@@ -325,6 +489,7 @@ $createpersistence = @"
 echo "[webservers]" > /home/$AdminUser/hosts && \
 echo "$vm2ip" >> /home/$AdminUser/hosts && \
 echo "$vm3ip" >> /home/$AdminUser/hosts && \
+echo "$vm4ip" >> /home/$AdminUser/hosts && \
 echo "[default]" > /home/$AdminUser/ansible.cfg && \
 echo "remote_user = $AdminUser" >> /home/$AdminUser/ansible.cfg && \
 echo "$sshPrivateKey" > /home/$AdminUser/.ssh/id_rsa && \
@@ -385,3 +550,4 @@ Write-Host "##############################`n## Results                       `n#
 Write-Host "VM1: [$vm1][$vm1ip] - $adminuser@$($results[$vm1]['publicip'])" -ForegroundColor Green
 Write-Host "VM2: [$vm2][$vm2ip] - $adminuser@$($results[$vm2]['publicip'])" -ForegroundColor Green
 Write-Host "VM3: [$vm3][$vm2ip] - $adminuser@$($results[$vm3]['publicip'])" -ForegroundColor Green
+Write-Host "VM3: [$vm4][$vm4ip] - $adminuser@$($results[$vm4]['publicip'])" -ForegroundColor Green
