@@ -56,7 +56,7 @@ Function Create-AzEnvironment($resourceGroupName, $location1) {
     -AddressPrefix $CIDRRange `
     -Subnet $subnet
 
-  return $virtualNetwork
+  return $virtualNetwork 
 }
 
 Function Create-CustomVM ($VMName, $location1, $resourceGroupName, $availabilitySetName, $VirtulNetwork, $adminuser){

@@ -66,7 +66,7 @@ Function Create-AzEnvironment($resourceGroupName, $location) {
     -AddressPrefix $CIDRRange `
     -Subnet $subnet
 
-  return $virtualNetwork
+  return $virtualNetwork #create an array for both networks (return@($virtualnetwork, $virtualnetwork2))
   
 }
 
