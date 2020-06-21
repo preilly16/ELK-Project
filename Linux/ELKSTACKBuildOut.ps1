@@ -1,3 +1,8 @@
+##############################################################
+#### This was my attempt to add the second virtual network
+#### and additional ELK Server VM (It does not work but thought I'd include it anyway.)
+##############################################################
+
 Connect-AzAccount
 Set-Item Env:\SuppressAzurePowerShellBreakingChangeWarnings "true"
 
